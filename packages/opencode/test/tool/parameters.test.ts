@@ -111,8 +111,11 @@ describe("tool parameters", () => {
     })
     test("accepts optional timeout + workdir", () => {
       const parsed = parse(Shell, { command: "ls", timeout: 5000, workdir: "/tmp" })
-      expect(parsed.timeout).toBe(5000)
-      expect(parsed.workdir).toBe("/tmp")
+      expect(parsed).toMatchObject({ command: "ls", timeout: 5000, workdir: "/tmp" })
+    })
+    test("accepts a commands batch", () => {
+      const parsed = parse(Shell, { commands: [{ command: "ls" }, { command: "pwd" }] })
+      expect(parsed).toEqual({ commands: [{ command: "ls" }, { command: "pwd" }] })
     })
     test("rejects missing command", () => {
       expect(accepts(Shell, {})).toBe(false)

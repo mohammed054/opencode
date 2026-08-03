@@ -609,35 +609,88 @@ export const ShellTool = Tool.define(
           execute: (params: Parameters, ctx: Tool.Context) =>
             Effect.gen(function* () {
               const instanceCtx = yield* InstanceState.context
-              const cwd = params.workdir
-                ? yield* resolvePath(params.workdir, instanceCtx.directory, shell)
-                : instanceCtx.directory
-              if (params.timeout !== undefined && params.timeout < 0) {
-                throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
-              }
-              const timeout = params.timeout ?? defaultTimeoutMs
               const ps = Shell.ps(shell)
-              yield* Effect.scoped(
-                Effect.gen(function* () {
-                  const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
-                    Effect.sync(() => tree.delete()),
-                  )
-                  const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
-                  if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
-                  yield* ask(ctx, scan, params)
-                }),
+              const env = yield* shellEnv(ctx, instanceCtx.directory)
+
+              const authorize = Effect.fn("ShellTool.authorize")(function* (command: string, workdir?: string) {
+                const cwd = workdir ? yield* resolvePath(workdir, instanceCtx.directory, shell) : instanceCtx.directory
+                yield* Effect.scoped(
+                  Effect.gen(function* () {
+                    const tree = yield* Effect.acquireRelease(parse(command, ps), (tree) =>
+                      Effect.sync(() => tree.delete()),
+                    )
+                    const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
+                    if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
+                    yield* ask(ctx, scan, { command })
+                  }),
+                )
+                return cwd
+              })
+
+              if (!("commands" in params)) {
+                if (params.timeout !== undefined && params.timeout < 0) {
+                  throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
+                }
+                const cwd = yield* authorize(params.command, params.workdir)
+                return yield* run(
+                  {
+                    shell,
+                    command: params.command,
+                    cwd,
+                    env,
+                    timeout: params.timeout ?? defaultTimeoutMs,
+                  },
+                  ctx,
+                )
+              }
+              if (params.commands.length === 0) {
+                throw new Error("Shell: commands must contain at least one command")
+              }
+              const batch = params.commands
+              const jobs = yield* Effect.forEach(
+                batch,
+                (job) =>
+                  Effect.gen(function* () {
+                    if (job.timeout !== undefined && job.timeout < 0) {
+                      throw new Error(`Invalid timeout value: ${job.timeout}. Timeout must be a positive number.`)
+                    }
+                    const cwd = yield* authorize(job.command, job.workdir)
+                    return yield* run(
+                      {
+                        shell,
+                        command: job.command,
+                        cwd,
+                        env,
+                        timeout: job.timeout ?? defaultTimeoutMs,
+                      },
+                      ctx,
+                    )
+                  }),
+                { concurrency: 4 },
               )
 
-              return yield* run(
-                {
-                  shell,
-                  command: params.command,
-                  cwd,
-                  env: yield* shellEnv(ctx, cwd),
-                  timeout,
+              const exits = jobs.map((job) => job.metadata.exit ?? 1)
+              const output = jobs
+                .map((job, i) => `=== [${i + 1}/${jobs.length}] ${job.title} ===\n${job.output}\n[exit ${job.metadata.exit ?? "null"}]\n`)
+                .join("\n")
+              return {
+                title: jobs.length > 1 ? `${jobs[0].title} (+${jobs.length - 1} more)` : jobs[0].title,
+                metadata: {
+                  output: jobs.map((job) => `${job.title} → exit ${job.metadata.exit ?? "null"}`).join("\n"),
+                  exit: exits.length > 0 ? Math.max(...exits) : 0,
+                  truncated: jobs.some((job) => job.metadata.truncated),
+                  ...(jobs.some((job) => job.metadata.outputPath)
+                    ? { outputPath: jobs.find((job) => job.metadata.outputPath)?.metadata.outputPath! }
+                    : {}),
+                  commands: jobs.map((job) => ({
+                    command: job.title,
+                    exit: job.metadata.exit,
+                    truncated: job.metadata.truncated,
+                    ...(job.metadata.outputPath ? { outputPath: job.metadata.outputPath } : {}),
+                  })),
                 },
-                ctx,
-              )
+                output,
+              }
             }),
         }
       })

@@ -19,27 +19,66 @@ exports[`tool parameters JSON Schema (wire shape) apply_patch 1`] = `
 exports[`tool parameters JSON Schema (wire shape) bash 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "properties": {
-    "command": {
-      "description": "The command to execute",
-      "type": "string",
+  "anyOf": [
+    {
+      "properties": {
+        "command": {
+          "description": "The command to execute",
+          "type": "string",
+        },
+        "timeout": {
+          "description": "Optional timeout in milliseconds",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer",
+        },
+        "workdir": {
+          "description": "The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.",
+          "type": "string",
+        },
+      },
+      "required": [
+        "command",
+      ],
+      "type": "object",
     },
-    "timeout": {
-      "description": "Optional timeout in milliseconds",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991,
-      "minimum": -9007199254740991,
-      "type": "integer",
+    {
+      "properties": {
+        "commands": {
+          "description": "Run multiple independent commands concurrently in a single call. Each command reports its own exit code and output; the call exits non-zero if any command fails. Prefer this over several parallel tool calls when you need compact results (e.g., git status + git diff).",
+          "items": {
+            "properties": {
+              "command": {
+                "description": "A command to execute",
+                "type": "string",
+              },
+              "timeout": {
+                "description": "Optional per-command timeout in milliseconds",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer",
+              },
+              "workdir": {
+                "description": "The working directory for this command",
+                "type": "string",
+              },
+            },
+            "required": [
+              "command",
+            ],
+            "type": "object",
+          },
+          "type": "array",
+        },
+      },
+      "required": [
+        "commands",
+      ],
+      "type": "object",
     },
-    "workdir": {
-      "description": "The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.",
-      "type": "string",
-    },
-  },
-  "required": [
-    "command",
   ],
-  "type": "object",
 }
 `;
 
