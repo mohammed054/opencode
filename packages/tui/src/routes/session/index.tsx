@@ -1734,6 +1734,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={display() === "bash"}>
           <Shell {...toolprops} />
         </Match>
+        <Match when={display() === "terminal"}>
+          <Terminal {...toolprops} />
+        </Match>
         <Match when={display() === "glob"}>
           <Glob {...toolprops} />
         </Match>
@@ -2092,6 +2095,50 @@ function Shell(props: ToolProps) {
         </InlineTool>
       </Match>
     </Switch>
+  )
+}
+
+function Terminal(props: ToolProps) {
+  const { theme } = useTheme()
+  const isRunning = createMemo(() => props.part.state.status === "running")
+  const output = createMemo(() => stringValue(props.metadata.output)?.trim() ?? "")
+  const exit = createMemo(() => numberValue(props.metadata.exit))
+  const desc = createMemo(
+    () =>
+      stringValue(props.input.description) ??
+      stringValue(props.input.command) ??
+      stringValue(props.input.input) ??
+      "Terminal",
+  )
+  const live = createMemo(() => isRunning() || output().length > 40)
+  const collapsed = createMemo(() => {
+    if (output().length <= 300) return { output: output(), overflow: false }
+    return { output: output().slice(0, 300) + "...", overflow: true }
+  })
+
+  return (
+    <Show
+      when={live()}
+      fallback={
+        <InlineTool icon="▸" pending="Running in terminal..." complete={output() || desc()} part={props.part}>
+          {output() || desc()}
+        </InlineTool>
+      }
+    >
+      <BlockTool title={desc()} part={props.part}>
+        <box gap={1}>
+          <Show when={isRunning()} fallback={<text fg={theme.text}>$ {desc()}</text>}>
+            <Spinner color={theme.text}>{desc()}</Spinner>
+          </Show>
+          <Show when={output()}>
+            <text fg={theme.text}>{collapsed().output}</text>
+          </Show>
+          <Show when={!isRunning() && exit() !== null && exit() !== undefined}>
+            <text fg={exit() === 0 ? theme.textMuted : theme.error}>Exit code: {exit()}</text>
+          </Show>
+        </box>
+      </BlockTool>
+    </Show>
   )
 }
 
