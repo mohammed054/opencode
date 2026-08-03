@@ -7,6 +7,8 @@ Use this tool when you need a TTY-aware (interactive) terminal session. It suppo
    - **close** — terminate the session and free its resources.
 3. Interactive sessions let you respond to prompts, abort a command at any moment (send Ctrl+C), or press any key — like sitting at a real terminal.
 
+Sessions survive restarts: their output is persisted to disk. After a restart you can still **read** a session's output (the tool will note it is no longer running), but **send** will fail — create a new session to continue.
+
 Be aware: OS: ${os}, Shell: ${shell}
 
 Commands run in ${directory} by default. Pass `workdir` to run elsewhere; do not use `cd` chains.
