@@ -283,6 +283,23 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
+            if (permission === "terminal") {
+              const command = typeof data.command === "string" ? data.command : ""
+              const input = typeof data.input === "string" ? data.input : ""
+              const description = typeof data.description === "string" ? data.description : ""
+              return {
+                icon: "▸",
+                title: "Terminal",
+                body: (
+                  <Show when={command || input || description}>
+                    <box paddingLeft={1}>
+                      <text fg={theme.text}>{"$ " + (command || input || description)}</text>
+                    </box>
+                  </Show>
+                ),
+              }
+            }
+
             if (permission === "task") {
               const type = typeof data.subagent_type === "string" ? data.subagent_type : "Unknown"
               const desc = typeof data.description === "string" ? data.description : ""

@@ -1,0 +1,16 @@
+Use this tool when you need a TTY-aware (interactive) terminal session. It supports:
+
+1. **run** — execute a single command in a real terminal (PTY) and wait for it to finish. This is the default action when no action is given. Use it for commands that need a terminal, interact with the TTY, or behave differently without one (git commit editors, prompts, long-running processes). Prefer it over the shell tool when the command may produce live progress output or needs a real TTY.
+2. **create** — open a persistent interactive terminal session in the background. You can then:
+   - **send** — type input into the running session (commands, or control keys like `\x03` for Ctrl+C to abort the current command, `\x04` for Ctrl+D, `\x1a` for Ctrl+Z, `\x1c` for Ctrl+\). Commands are submitted with an Enter keypress automatically.
+   - **read** — read the new output the session produced since your last read. This lets you watch long-running or interactive processes step by step and react to what the terminal says.
+   - **close** — terminate the session and free its resources.
+3. Interactive sessions let you respond to prompts, abort a command at any moment (send Ctrl+C), or press any key — like sitting at a real terminal.
+
+Be aware: OS: ${os}, Shell: ${shell}
+
+Commands run in ${directory} by default. Pass `workdir` to run elsewhere; do not use `cd` chains.
+
+Use this tool for interactive, long-running, or TTY-sensitive work (dev servers, REPLs, prompts, editors, watched builds, anything you may need to interrupt). Use the regular shell tool for quick, non-interactive commands that just need to run and return output.
+
+The terminal tool waits up to 120 seconds by default; pass a larger `timeout` (in milliseconds) for commands expected to take longer. On timeout or user abort, the process tree is terminated and the tool always returns control.
