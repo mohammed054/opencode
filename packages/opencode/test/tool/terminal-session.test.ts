@@ -12,7 +12,7 @@ import { Truncate } from "@/tool/truncate"
 import { SessionID, MessageID } from "../../src/session/schema"
 import * as Tool from "../../src/tool/tool"
 import { testEffect } from "../lib/effect"
-import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { disposeAllInstances, reloadInstance, TestInstance } from "../fixture/fixture"
 
 const ctx: Tool.Context = {
   sessionID: SessionID.make("ses_test-terminal-session"),
@@ -209,6 +209,62 @@ describe("tool.terminal (live PTY)", () => {
 
       const closed = yield* tool.execute({ action: "close", sessionId }, ctx)
       expect(closed.output).toContain("closed")
+    }),
+  )
+
+  it.instance("persists sessions across a restart and restores them as ended", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const tool = yield* initTool()
+
+      // Phase 1: create a session and produce output without reading it
+      const created = yield* tool.execute(
+        {
+          action: "create",
+          workdir: test.directory,
+          description: "persist me",
+        },
+        ctx,
+      )
+      const sessionId = (created.metadata as { sessionId?: string }).sessionId!
+      expect(typeof sessionId).toBe("string")
+
+      const sent = yield* tool.execute(
+        { action: "send", sessionId, input: "echo hello", description: "send echo" },
+        ctx,
+      )
+      expect(sent.output).toContain("sent")
+
+      // Wait for the command to complete and the debounced save to flush
+      yield* Effect.sleep("1.5 seconds")
+
+      // Simulate a restart: the instance (and its live PTYs) is torn down and
+      // a fresh instance state is created for the same directory.
+      yield* reloadInstance({ directory: test.directory })
+
+      // Phase 2: the session must have been restored from disk as an ended
+      // session — its unread output survives, send is rejected, close works.
+      const read = yield* tool.execute(
+        { action: "read", sessionId, description: "read after restart" },
+        ctx,
+      )
+      expect(read.output).toContain("hello")
+      expect(read.output).toContain("restored")
+
+      const send = yield* tool.execute(
+        { action: "send", sessionId, input: "echo nope", description: "send after restart" },
+        ctx,
+      )
+      expect(send.output).toContain("not running")
+
+      const closed = yield* tool.execute({ action: "close", sessionId }, ctx)
+      expect(closed.output).toContain("closed")
+
+      const missing = yield* tool.execute(
+        { action: "read", sessionId, description: "read after close" },
+        ctx,
+      )
+      expect(missing.output).toContain("not found")
     }),
   )
 })
