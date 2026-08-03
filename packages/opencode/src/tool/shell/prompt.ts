@@ -13,13 +13,26 @@ export type Limits = {
 }
 
 export function parameterSchema() {
-  return Schema.Struct({
+  const single = Schema.Struct({
     command: Schema.String.annotate({ description: "The command to execute" }),
     timeout: Schema.optional(PositiveInt).annotate({ description: "Optional timeout in milliseconds" }),
     workdir: Schema.optional(Schema.String).annotate({
       description: `The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.`,
     }),
   })
+  const batch = Schema.Struct({
+    commands: Schema.Array(
+      Schema.Struct({
+        command: Schema.String.annotate({ description: "A command to execute" }),
+        timeout: Schema.optional(PositiveInt).annotate({ description: "Optional per-command timeout in milliseconds" }),
+        workdir: Schema.optional(Schema.String).annotate({ description: "The working directory for this command" }),
+      }),
+    ).annotate({
+      description:
+        "Run multiple independent commands concurrently in a single call. Each command reports its own exit code and output; the call exits non-zero if any command fails. Prefer this over several parallel tool calls when you need compact results (e.g., git status + git diff).",
+    }),
+  })
+  return Schema.Union([single, batch])
 }
 
 export const Parameters = parameterSchema()
@@ -106,6 +119,7 @@ Usage notes:
     - Communication: Output text directly (NOT echo/printf)
   - When issuing multiple commands:
     - If the commands are independent and can run in parallel, make multiple bash tool calls in a single message. For example, if you need to run "git status" and "git diff", send a single message with two bash tool calls in parallel.
+    - Alternatively, pass a commands array to run independent commands concurrently in one call; each entry is { command, timeout?, workdir? } and reports its own exit code and output. Keep batches under ~4 commands and reserve them for quick probes, not long-running builds.
     - ${chain}
     - Use ';' only when you need to run commands sequentially but don't care if earlier commands fail
     - DO NOT use newlines to separate commands (newlines are ok in quoted strings)
@@ -157,6 +171,7 @@ Usage notes:
     - Communication: Output text directly (NOT Write-Output/Write-Host)
   - When issuing multiple commands:
     - If the commands are independent and can run in parallel, make multiple bash tool calls in a single message. For example, if you need to run "git status" and "git diff", send a single message with two bash tool calls in parallel.
+    - Alternatively, pass a commands array to run independent commands concurrently in one call; each entry is { command, timeout?, workdir? } and reports its own exit code and output. Keep batches under ~4 commands and reserve them for quick probes, not long-running builds.
     - ${chain}
     - Use \`;\` only when you need to run commands sequentially but don't care if earlier commands fail
     - DO NOT use newlines to separate commands (newlines are ok in quoted strings)
@@ -206,6 +221,7 @@ Usage notes:
     - Communication: Output text directly (NOT echo)
   - When issuing multiple commands:
     - If the commands are independent and can run in parallel, make multiple bash tool calls in a single message. For example, if you need to run "dir" and "where cmd", send a single message with two bash tool calls in parallel.
+    - Alternatively, pass a commands array to run independent commands concurrently in one call; each entry is { command, timeout?, workdir? } and reports its own exit code and output. Keep batches under ~4 commands and reserve them for quick probes, not long-running builds.
     - ${chain}
     - Use \`&\` only when you need to run commands sequentially but don't care if earlier commands fail
     - DO NOT use newlines to separate commands (newlines are ok in quoted strings)

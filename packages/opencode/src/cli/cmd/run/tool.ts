@@ -622,8 +622,8 @@ function snapQuestion(p: ToolProps<typeof QuestionTool>): ToolSnapshot {
 }
 
 function scrollBashStart(p: ToolProps<typeof BashTool>): string {
-  const cmd = p.input.command ?? ""
-  const wd = p.input.workdir ?? ""
+  const cmd = "command" in p.input ? p.input.command ?? "" : ""
+  const wd = "command" in p.input ? p.input.workdir ?? "" : ""
   const formatted = wd && wd !== "." ? toolPath(wd) : ""
   const dir = formatted === "." ? "" : formatted
   if (cmd && !dir) {
@@ -639,7 +639,7 @@ function scrollBashStart(p: ToolProps<typeof BashTool>): string {
 
 function scrollBashProgress(p: ToolProps<typeof BashTool>): string {
   const out = stripAnsi(p.frame.raw)
-  const cmd = (p.input.command ?? "").trim()
+  const cmd = ("command" in p.input ? p.input.command ?? "" : "").trim()
   const fmt = (text: string) => {
     const body = text.replace(/^\n+/, "").replace(/\n+$/, "")
     return body ? `\n${body}` : ""
@@ -649,7 +649,7 @@ function scrollBashProgress(p: ToolProps<typeof BashTool>): string {
     return out.replace(/\n+$/, "")
   }
 
-  const wdRaw = (p.input.workdir ?? "").trim()
+  const wdRaw = ("command" in p.input ? p.input.workdir ?? "" : "").trim()
   const wd = wdRaw ? toolPath(wdRaw) : ""
   const lines = out.split("\n")
   const first = (lines[0] || "").trim()
@@ -966,7 +966,14 @@ function permList(p: ToolPermissionProps): ToolPermissionInfo {
 }
 
 function permBash(p: ToolPermissionProps<typeof BashTool>): ToolPermissionInfo {
-  const cmd = p.input.command || ""
+  if ("commands" in p.input && p.input.commands) {
+    return {
+      icon: "#",
+      title: `Shell commands (${p.input.commands.length})`,
+      lines: p.patterns.map((item) => `- ${item}`),
+    }
+  }
+  const cmd = "command" in p.input ? p.input.command || "" : ""
   return {
     icon: "#",
     title: "Shell command",
@@ -1270,9 +1277,15 @@ export function toolFrame(commit: StreamCommit, raw: string): ToolFrame {
 }
 
 function runBash(p: ToolProps<typeof BashTool>): ToolInline {
+  const title =
+    "commands" in p.input && p.input.commands
+      ? `batch (${p.input.commands.length} commands)`
+      : "command" in p.input
+        ? p.input.command || ""
+        : ""
   return {
     icon: "$",
-    title: p.input.command || "",
+    title,
     mode: "block",
     body: p.frame.status === "completed" ? text(p.frame.state.output).trim() : undefined,
   }

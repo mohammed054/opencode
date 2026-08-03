@@ -205,17 +205,102 @@ describe("tool.shell", () => {
           expect(fallback).not.toBe("fish")
           expect(bash.description).toContain(fallback)
 
-          const result = yield* bash.execute(
-            {
-              command: "echo fallback",
-            },
-            ctx,
-          )
-          expect(result.metadata.exit).toBe(0)
-          expect(result.output).toContain("fallback")
-        }),
+      const result = yield* bash.execute(
+        {
+          command: "echo fallback",
+        },
+        ctx,
       )
+      expect(result.metadata.exit).toBe(0)
+      expect(result.output).toContain("fallback")
     }),
+  )
+})
+)
+})
+
+describe("tool.shell batch", () => {
+  it.live(
+    "runs multiple commands concurrently and reports per-command exit codes",
+    () =>
+      runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const result = yield* run({
+            commands: [{ command: "echo one" }, { command: "echo two" }, { command: "echo three" }],
+          })
+          expect(result.metadata.exit).toBe(0)
+          const commands = (result.metadata as { commands?: Array<{ command: string; exit: number | null }> })
+            .commands!
+          expect(commands).toHaveLength(3)
+          for (const command of ["one", "two", "three"]) {
+            expect(result.output).toContain(`[${command === "one" ? 1 : command === "two" ? 2 : 3}/3]`)
+            expect(result.output).toContain(command)
+          }
+        }),
+      ),
+  )
+
+  it.live(
+    "aggregate exit is non-zero when any command fails",
+    () =>
+      runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const result = yield* run({
+            commands: [{ command: "echo ok" }, { command: "exit 42" }],
+          })
+          expect(result.metadata.exit).toBe(42)
+          const commands = (result.metadata as { commands?: Array<{ command: string; exit: number | null }> })
+            .commands!
+          expect(commands).toHaveLength(2)
+          expect(commands[0].exit).toBe(0)
+          expect(commands[1].exit).toBe(42)
+        }),
+      ),
+  )
+
+  it.live(
+    "per-command timeout applies and always settles",
+    () =>
+      runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const started = Date.now()
+          const result = yield* run({
+            commands: [{ command: "echo quick" }, { command: "sleep 30", timeout: 2_000 }],
+          })
+          const elapsed = Date.now() - started
+          expect(elapsed).toBeLessThan(20_000)
+          expect(result.metadata.exit).toBe(1)
+          expect(result.output).toContain("echo quick")
+          expect(result.output).toContain("shell tool terminated command after exceeding timeout")
+        }),
+      ),
+  )
+
+  it.live(
+    "commands run in per-command workdirs",
+    () =>
+      runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const a = yield* tmpdirScoped()
+          const b = yield* tmpdirScoped()
+          const probe = `${PS.has(sh()) ? "& " : ""}${bin} -e ${evalarg("console.log(process.cwd())")}`
+          const result = yield* run({
+            commands: [
+              { command: probe, workdir: a },
+              { command: probe, workdir: b },
+            ],
+          })
+          expect(result.metadata.exit).toBe(0)
+          for (const form of forms(a)) {
+            if (result.output.includes(form)) return
+          }
+          throw new Error(`output does not contain ${a}:\n${result.output}`)
+        }),
+      ),
   )
 })
 
