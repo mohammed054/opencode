@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cleanOutput, extractExit, filterEcho, sentinelCommand } from "../../src/tool/terminal"
+import { cleanOutput, containerCommand, extractExit, filterEcho, sentinelCommand } from "../../src/tool/terminal"
 
 describe("sentinelCommand", () => {
   test("uses [int] cast for PowerShell so a fresh shell reports 0", () => {
@@ -65,5 +65,21 @@ describe("cleanOutput", () => {
     const { output, exit } = cleanOutput("some output", "echo hi")
     expect(exit).toBeNull()
     expect(output).toBe("some output")
+  })
+})
+
+describe("containerCommand", () => {
+  test("defaults to sh inside the container", () => {
+    expect(containerCommand("my-container")).toEqual({
+      command: "docker",
+      args: ["exec", "-it", "my-container", "sh"],
+    })
+  })
+
+  test("uses the requested shell", () => {
+    expect(containerCommand("c1", "bash")).toEqual({
+      command: "docker",
+      args: ["exec", "-it", "c1", "bash"],
+    })
   })
 })

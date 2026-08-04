@@ -16,6 +16,10 @@ export const TerminalSessionSnapshot = Schema.Struct({
   exitCode: Schema.NullOr(Schema.Number),
   description: Schema.String,
   shell: Schema.String,
+  agent: Schema.String.annotate({ description: "Name of the agent that created the session" }),
+  container: Schema.NullOr(Schema.String).annotate({
+    description: "Container the session runs inside, when created with the container param",
+  }),
   cwd: Schema.String,
   createdAt: Schema.Number,
 }).annotate({ identifier: "TerminalSessionSnapshot" })

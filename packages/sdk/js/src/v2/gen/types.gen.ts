@@ -2607,6 +2607,11 @@ export type TerminalSessionSnapshot = {
   exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   description: string
   shell: string
+  /**
+   * Name of the agent that created the session
+   */
+  agent: string
+  container: string
   cwd: string
   createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
