@@ -13,6 +13,8 @@ Be aware: OS: ${os}, Shell: ${shell}
 
 Commands run in ${directory} by default. Pass `workdir` to run elsewhere; do not use `cd` chains.
 
+To run a terminal inside a Docker container, pass `container` (container name or ID) to **run** or **create**. The shell is launched with `docker exec -it <container> <shell>`; `shell` defaults to `sh` and is ignored without `container`. This requires the docker CLI and a running container — errors from docker (missing CLI, unknown container) appear in the terminal output. Sessions running in containers are tagged with the container so you can tell them apart.
+
 Use this tool for interactive, long-running, or TTY-sensitive work (dev servers, REPLs, prompts, editors, watched builds, anything you may need to interrupt). Use the regular shell tool for quick, non-interactive commands that just need to run and return output.
 
 The terminal tool waits up to 120 seconds by default; pass a larger `timeout` (in milliseconds) for commands expected to take longer. On timeout or user abort, the process tree is terminated and the tool always returns control.

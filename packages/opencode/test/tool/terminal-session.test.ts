@@ -9,6 +9,7 @@ import { Format } from "../../src/format"
 import { Agent } from "../../src/agent/agent"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Truncate } from "@/tool/truncate"
+import { Session } from "../../src/session/session"
 import { SessionID, MessageID } from "../../src/session/schema"
 import * as Tool from "../../src/tool/tool"
 import { testEffect } from "../lib/effect"
@@ -44,6 +45,7 @@ const layer = LayerNode.compile(
     EventV2Bridge.node,
     Truncate.node,
     Agent.node,
+    Session.node,
   ]),
 )
 

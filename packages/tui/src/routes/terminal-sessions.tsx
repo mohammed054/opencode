@@ -17,6 +17,7 @@ const terminalMonitorCommands = [
   "terminal.monitor.close",
   "terminal.monitor.input",
   "terminal.monitor.refresh",
+  "terminal.monitor.agent",
   "terminal.monitor.back",
 ] as const
 
@@ -38,10 +39,18 @@ export function TerminalSessions() {
   const [sessions, setSessions] = createSignal<TerminalSessionSnapshot[]>([])
   const [selected, setSelected] = createSignal(0)
   const [error, setError] = createSignal<string>()
+  const [filterAgent, setFilterAgent] = createSignal<string | undefined>()
   const [inputTarget, setInputTarget] = createSignal<InputRenderable>()
   let input: InputRenderable | undefined
 
   const inputFocused = () => input?.focused ?? false
+
+  const agents = () => [...new Set(sessions().map((session) => session.agent).filter((agent) => agent.length > 0))].toSorted()
+
+  const visible = () => {
+    const filter = filterAgent()
+    return filter ? sessions().filter((session) => session.agent === filter) : sessions()
+  }
 
   async function refresh() {
     const result = await sdk.client.terminalSessions.list()
@@ -52,7 +61,7 @@ export function TerminalSessions() {
     setError(undefined)
     const list = result.data ?? []
     setSessions(list)
-    if (selected() >= list.length) setSelected(Math.max(0, list.length - 1))
+    if (selected() >= visible().length) setSelected(Math.max(0, visible().length - 1))
   }
 
   onMount(() => {
@@ -64,7 +73,7 @@ export function TerminalSessions() {
     onCleanup(() => clearInterval(timer))
   })
 
-  const current = () => sessions()[selected()]
+  const current = () => visible()[selected()]
 
   async function closeSelected() {
     const session = current()
@@ -111,7 +120,7 @@ export function TerminalSessions() {
         title: "Select next terminal session",
         category: "Terminal",
         hidden: true,
-        run: () => setSelected((index) => Math.min(index + 1, Math.max(0, sessions().length - 1))),
+        run: () => setSelected((index) => Math.min(index + 1, Math.max(0, visible().length - 1))),
       },
       {
         name: "terminal.monitor.previous",
@@ -144,6 +153,20 @@ export function TerminalSessions() {
         run: () => void refresh(),
       },
       {
+        name: "terminal.monitor.agent",
+        title: "Filter terminal sessions by agent",
+        category: "Terminal",
+        hidden: true,
+        run: () => {
+          const list = agents()
+          if (list.length === 0) return
+          const current = filterAgent()
+          const next = current === undefined ? list[0] : list[list.indexOf(current) + 1]
+          setFilterAgent(next)
+          setSelected(0)
+        },
+      },
+      {
         name: "terminal.monitor.back",
         title: "Return from terminal session monitor",
         category: "Terminal",
@@ -168,7 +191,8 @@ export function TerminalSessions() {
           Terminal Sessions
         </text>
         <text fg={theme.textMuted}>
-          {sessions().filter((session) => session.live).length} live / {sessions().length} total
+          {visible().filter((session) => session.live).length} live / {visible().length} total · agent:{" "}
+          {filterAgent() ?? "all"}
         </text>
       </box>
       <Show when={error()}>
@@ -180,7 +204,11 @@ export function TerminalSessions() {
         <scrollbox scrollY stickyScroll stickyStart="bottom" flexGrow={1} minHeight={0}>
           <Show
             when={current()}
-            fallback={<text fg={theme.textMuted} paddingLeft={1}>No terminal sessions</text>}
+            fallback={
+              <text fg={theme.textMuted} paddingLeft={1}>
+                {filterAgent() ? `No sessions for agent ${filterAgent()}` : "No terminal sessions"}
+              </text>
+            }
             keyed
           >
             {(session) => (
@@ -190,6 +218,12 @@ export function TerminalSessions() {
                   <text attributes={TextAttributes.BOLD} fg={theme.text}>
                     {session.shell}
                   </text>
+                  <Show when={session.agent}>
+                    <text fg={theme.primary}>{session.agent}</text>
+                  </Show>
+                  <Show when={session.container}>
+                    <text fg={theme.warning}>docker:{session.container}</text>
+                  </Show>
                   <text fg={theme.textMuted}>{shortID(session.id)}</text>
                   <text fg={theme.textMuted}>{session.cwd}</text>
                   <Show when={session.exitCode !== null}>
@@ -211,7 +245,7 @@ export function TerminalSessions() {
       </box>
       <box flexShrink={0} flexDirection="column" paddingLeft={1} paddingRight={1} paddingBottom={1}>
         <box flexDirection="row" gap={2}>
-          <For each={sessions()}>
+          <For each={visible()}>
             {(session, index) => (
               <box
                 onMouseDown={() => setSelected(index())}
@@ -246,6 +280,7 @@ export function TerminalSessions() {
           <text fg={theme.textMuted}>j/k navigate</text>
           <text fg={theme.textMuted}>i input</text>
           <text fg={theme.textMuted}>x close</text>
+          <text fg={theme.textMuted}>a agent</text>
           <text fg={theme.textMuted}>r refresh</text>
           <text fg={theme.textMuted}>q back</text>
         </box>

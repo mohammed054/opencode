@@ -12,6 +12,7 @@ import { Global } from "@opencode-ai/core/global"
 import { Hash } from "@opencode-ai/core/util/hash"
 import * as Truncate from "./truncate"
 import { InstanceState } from "@/effect/instance-state"
+import { Session } from "@/session/session"
 import {
   registerTerminalSessions,
   unregisterTerminalSessions,
@@ -58,6 +59,9 @@ type SessionState = {
   exitCode: number | null
   description: string
   shell: string
+  agent: string
+  /** Container the session runs inside, when created with the container param. */
+  container: string | null
   cwd: string
   createdAt: number
   detach: () => void
@@ -87,6 +91,18 @@ export function sentinelCommand(ps: boolean, shell: string): string {
   return `echo "${SENTINEL_PREFIX}$?"`
 }
 
+/**
+ * Builds the `docker exec` invocation that runs an interactive shell inside a
+ * container. Returns undefined when no container is requested so callers can
+ * fall back to the host shell.
+ */
+export function containerCommand(
+  container: string,
+  shell?: string,
+): { command: string; args: string[] } {
+  return { command: "docker", args: ["exec", "-it", container, shell ?? "sh"] }
+}
+
 // ---------------------------------------------------------------------------
 // Parameters — discriminated union on "action"
 // ---------------------------------------------------------------------------
@@ -98,6 +114,12 @@ const RunAction = Schema.Struct({
   workdir: Schema.optional(Schema.String).annotate({
     description: "The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.",
   }),
+  container: Schema.optional(Schema.String).annotate({
+    description: "Name or ID of a Docker container to run the terminal inside. The shell is launched with `docker exec -it <container> <shell>`. Requires the docker CLI and a running container.",
+  }),
+  shell: Schema.optional(Schema.String).annotate({
+    description: "Shell to run inside the container when `container` is set (default: sh). Ignored without `container`.",
+  }),
   description: Schema.String.annotate({ description: "Clear, concise description of what this command does in 5-10 words" }),
 })
 
@@ -105,6 +127,12 @@ const CreateAction = Schema.Struct({
   action: Schema.Literal("create"),
   workdir: Schema.optional(Schema.String).annotate({ description: "Working directory for the session" }),
   description: Schema.optional(Schema.String).annotate({ description: "Description for the terminal session" }),
+  container: Schema.optional(Schema.String).annotate({
+    description: "Name or ID of a Docker container to run the terminal inside. The shell is launched with `docker exec -it <container> <shell>`. Requires the docker CLI and a running container.",
+  }),
+  shell: Schema.optional(Schema.String).annotate({
+    description: "Shell to run inside the container when `container` is set (default: sh). Ignored without `container`.",
+  }),
 })
 
 const SendAction = Schema.Struct({
@@ -216,6 +244,8 @@ export const TerminalTool = Tool.define(
     const locations = yield* LocationServiceMap.Service
     const trunc = yield* Truncate.Service
     const shell = Shell.name(Shell.acceptable())
+    // Captured at tool-init (task.ts does the same) so execute stays R=never.
+    const sessionsService = yield* Session.Service
 
     // The Pty service is location-scoped (it depends on Location), so it is
     // resolved per-instance through the LocationServiceMap like the HTTP PTY
@@ -230,56 +260,176 @@ export const TerminalTool = Tool.define(
       )
     })
 
+    type StoreMachine = {
+      sessions: Map<string, SessionState>
+      store: TerminalSessionsStore
+      schedule: () => void
+      flush: () => Effect.Effect<void>
+      stop: () => void
+    }
+
+    // Builds one session store: an in-memory session map with a subscriber
+    // list and snapshot/close/send operations. The main-agent (per-directory)
+    // store additionally gets debounced disk persistence; subagent stores are
+    // in-memory only.
+    const makeStoreMachine = (
+      sessions: Map<string, SessionState>,
+      file?: string,
+      subagent = false,
+    ): StoreMachine => {
+      const listeners = new Set<() => void>()
+      const emit = () => {
+        for (const listener of listeners) listener()
+      }
+
+      let dirty = false
+      let saveTimer: ReturnType<typeof setTimeout> | undefined
+
+      const flush = Effect.fn("TerminalTool.persist")(function* () {
+        if (!file || !dirty) return
+        dirty = false
+        if (sessions.size === 0) {
+          yield* Effect.tryPromise(() => rm(file, { force: true })).pipe(Effect.orDie)
+          return
+        }
+        const payload = {
+          version: PERSIST_VERSION,
+          sessions: [...sessions.entries()].map(([id, s]) => ({
+            id,
+            live: s.live,
+            buffer: s.buffer,
+            trimmed: s.trimmed,
+            reported: s.reported,
+            exitCode: s.exitCode,
+            description: s.description,
+            shell: s.shell,
+            agent: s.agent,
+            container: s.container,
+            cwd: s.cwd,
+            createdAt: s.createdAt,
+          })),
+        }
+        yield* Effect.tryPromise(async () => {
+          await mkdir(path.dirname(file), { recursive: true })
+          await writeFile(file, JSON.stringify(payload))
+        }).pipe(Effect.orDie)
+      })
+
+      const schedule = () => {
+        emit()
+        if (!file || saveTimer) return
+        dirty = true
+        saveTimer = setTimeout(() => {
+          saveTimer = undefined
+          Effect.runFork(flush())
+        }, 500)
+      }
+
+      const store: TerminalSessionsStore = {
+        subagent,
+        snapshot: () =>
+          [...sessions.entries()].map(([id, s]) => ({
+            id,
+            live: s.live,
+            buffer: s.buffer.slice(-SNAPSHOT_BUFFER_LIMIT),
+            trimmed: s.trimmed,
+            reported: s.reported,
+            exitCode: s.exitCode,
+            description: s.description,
+            shell: s.shell,
+            agent: s.agent,
+            container: s.container,
+            cwd: s.cwd,
+            createdAt: s.createdAt,
+          })),
+        subscribe: (listener) => {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+        close: (id) =>
+          Effect.gen(function* () {
+            const session = sessions.get(id)
+            if (!session) return false
+            if (session.live) {
+              session.detach()
+              yield* pty(Pty.Service.use((s) => s.remove(session.ptyId))).pipe(Effect.catch(() => Effect.void))
+            }
+            sessions.delete(id)
+            schedule()
+            return true
+          }),
+        send: (id, input) =>
+          Effect.gen(function* () {
+            const session = sessions.get(id)
+            if (!session || !session.live) return false
+            const data = /^\x03|\x04|\x1a|\x1c$/.test(input) ? input : input + LINE_END
+            yield* pty(Pty.Service.use((s) => s.write(session.ptyId, data))).pipe(Effect.catch(() => Effect.void))
+            return true
+          }),
+      }
+
+      return {
+        sessions,
+        store,
+        schedule,
+        flush,
+        stop: () => {
+          if (saveTimer) {
+            clearTimeout(saveTimer)
+            saveTimer = undefined
+          }
+        },
+      }
+    }
+
+    // Subagent sessions (sessions with a parentID) get their own store so
+    // parallel or background subagents cannot interfere with each other's or
+    // the main agent's terminals. Stores are dropped once their last session
+    // closes.
+    const subagentStores = new Map<string, StoreMachine>()
+
+    const getOrCreateSubagentStore = (sessionID: string): StoreMachine => {
+      const existing = subagentStores.get(sessionID)
+      if (existing) return existing
+      const sessions = new Map<string, SessionState>()
+      const machine = makeStoreMachine(sessions, undefined, true)
+      registerTerminalSessions(sessionID, machine.store)
+      subagentStores.set(sessionID, machine)
+      return machine
+    }
+
+    const getSubagentStore = (sessionID: string): StoreMachine | undefined => subagentStores.get(sessionID)
+
+    const dropSubagentStore = (sessionID: string) => {
+      const machine = subagentStores.get(sessionID)
+      if (!machine || machine.sessions.size > 0) return
+      machine.stop()
+      unregisterTerminalSessions(sessionID)
+      subagentStores.delete(sessionID)
+    }
+
+    // Resolves the store that owns sessions for the current tool call: the
+    // shared per-directory store for root sessions, or the subagent's own
+    // store when the call comes from a subagent session.
+    const resolveStore = Effect.fn("TerminalTool.resolveStore")(function* (ctx: Tool.Context) {
+      const session = yield* sessionsService.get(ctx.sessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+      if (session?.parentID) return getSubagentStore(ctx.sessionID)
+      return yield* InstanceState.get(sessionState)
+    })
+
+    // Like resolveStore, but creates the subagent's store on first use.
+    const resolveStoreOrCreate = Effect.fn("TerminalTool.resolveStoreOrCreate")(function* (ctx: Tool.Context) {
+      const session = yield* sessionsService.get(ctx.sessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+      if (session?.parentID) return getOrCreateSubagentStore(ctx.sessionID)
+      return yield* InstanceState.get(sessionState)
+    })
+
     const sessionState = yield* InstanceState.make(
       Effect.fn("TerminalTool.state")(function* (ctx) {
         const file = path.join(PERSIST_DIR, Hash.fast(ctx.directory) + ".json")
         const sessions = new Map<string, SessionState>()
-
-        let dirty = false
-        let saveTimer: ReturnType<typeof setTimeout> | undefined
-
-        const listeners = new Set<() => void>()
-        const emit = () => {
-          for (const listener of listeners) listener()
-        }
-
-        const flush = Effect.fn("TerminalTool.persist")(function* () {
-          if (!dirty) return
-          dirty = false
-          if (sessions.size === 0) {
-            yield* Effect.tryPromise(() => rm(file, { force: true })).pipe(Effect.orDie)
-            return
-          }
-          const payload = {
-            version: PERSIST_VERSION,
-            sessions: [...sessions.entries()].map(([id, s]) => ({
-              id,
-              live: s.live,
-              buffer: s.buffer,
-              trimmed: s.trimmed,
-              reported: s.reported,
-              exitCode: s.exitCode,
-              description: s.description,
-              shell: s.shell,
-              cwd: s.cwd,
-              createdAt: s.createdAt,
-            })),
-          }
-          yield* Effect.tryPromise(async () => {
-            await mkdir(path.dirname(file), { recursive: true })
-            await writeFile(file, JSON.stringify(payload))
-          }).pipe(Effect.orDie)
-        })
-
-        const schedule = () => {
-          emit()
-          if (saveTimer) return
-          dirty = true
-          saveTimer = setTimeout(() => {
-            saveTimer = undefined
-            Effect.runFork(flush())
-          }, 500)
-        }
+        const machine = makeStoreMachine(sessions, file)
+        const { schedule } = machine
 
         // Restore sessions persisted by a previous process. PTYs cannot
         // survive a restart, so restored sessions are marked ended but keep
@@ -302,6 +452,8 @@ export const TerminalTool = Tool.define(
                 exitCode: typeof entry.exitCode === "number" ? entry.exitCode : null,
                 description: typeof entry.description === "string" ? entry.description : "",
                 shell: typeof entry.shell === "string" ? entry.shell : "",
+                agent: typeof entry.agent === "string" ? entry.agent : "",
+                container: typeof entry.container === "string" ? entry.container : null,
                 cwd: typeof entry.cwd === "string" ? entry.cwd : "",
                 createdAt: typeof entry.createdAt === "number" ? entry.createdAt : 0,
                 detach: () => {},
@@ -310,67 +462,24 @@ export const TerminalTool = Tool.define(
           }
         }
 
-        const store: TerminalSessionsStore = {
-          snapshot: () =>
-            [...sessions.entries()].map(([id, s]) => ({
-              id,
-              live: s.live,
-              buffer: s.buffer.slice(-SNAPSHOT_BUFFER_LIMIT),
-              trimmed: s.trimmed,
-              reported: s.reported,
-              exitCode: s.exitCode,
-              description: s.description,
-              shell: s.shell,
-              cwd: s.cwd,
-              createdAt: s.createdAt,
-            })),
-          subscribe: (listener) => {
-            listeners.add(listener)
-            return () => listeners.delete(listener)
-          },
-          close: (id) =>
-            Effect.gen(function* () {
-              const session = sessions.get(id)
-              if (!session) return false
-              if (session.live) {
-                session.detach()
-                yield* pty(Pty.Service.use((s) => s.remove(session.ptyId))).pipe(Effect.catch(() => Effect.void))
-              }
-              sessions.delete(id)
-              schedule()
-              return true
-            }),
-          send: (id, input) =>
-            Effect.gen(function* () {
-              const session = sessions.get(id)
-              if (!session || !session.live) return false
-              const data = /^\x03|\x04|\x1a|\x1c$/.test(input) ? input : input + LINE_END
-              yield* pty(Pty.Service.use((s) => s.write(session.ptyId, data))).pipe(Effect.catch(() => Effect.void))
-              return true
-            }),
-        }
-        registerTerminalSessions(ctx.directory, store)
+        registerTerminalSessions(ctx.directory, machine.store)
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             // Stop new saves, then tear down live PTYs (their onEnd no longer
             // schedules), then persist the final state, then drop the map.
-            if (saveTimer) {
-              clearTimeout(saveTimer)
-              saveTimer = undefined
-            }
+            machine.stop()
             for (const session of sessions.values()) {
               if (!session.live) continue
               yield* pty(Pty.Service.use((s) => s.remove(session.ptyId))).pipe(Effect.orDie)
             }
-            yield* flush()
+            yield* machine.flush()
             sessions.clear()
-            listeners.clear()
             unregisterTerminalSessions(ctx.directory)
           }),
         )
 
-        return { sessions, schedule }
+        return machine
       }),
     )
 
@@ -409,6 +518,9 @@ export const TerminalTool = Tool.define(
                 cwd,
                 title: `Agent: ${params.description.slice(0, 30)}`,
                 env: {},
+                ...(params.container
+                  ? containerCommand(params.container, params.shell)
+                  : {}),
               })))
               const isPs = Shell.ps(info.command)
 
@@ -550,6 +662,7 @@ export const TerminalTool = Tool.define(
             const instanceCtx = yield* InstanceState.context
             const cwd = params.workdir ?? instanceCtx.directory
             const desc = params.description ?? "Terminal session"
+            const container = params.container ?? undefined
 
             yield* ctx.ask({
               permission: "terminal",
@@ -558,7 +671,8 @@ export const TerminalTool = Tool.define(
               metadata: { description: desc },
             })
 
-            const { sessions, schedule } = yield* InstanceState.get(sessionState)
+            const machine = yield* resolveStoreOrCreate(ctx)
+            const { sessions, schedule } = machine
 
             // FIFO eviction: if at max, remove oldest
             if (sessions.size >= MAX_SESSIONS) {
@@ -577,6 +691,7 @@ export const TerminalTool = Tool.define(
                 cwd,
                 title: desc.slice(0, 30),
                 env: {},
+                ...(container ? containerCommand(container, params.shell) : {}),
               }),
             ))
 
@@ -588,7 +703,9 @@ export const TerminalTool = Tool.define(
               reported: 0,
               exitCode: null,
               description: desc,
-              shell: Shell.name(info.command),
+              shell: container ? (params.shell ?? "sh") : Shell.name(info.command),
+              agent: ctx.agent,
+              container: container ?? null,
               cwd,
               createdAt: Date.now(),
               detach: () => {},
@@ -639,14 +756,27 @@ export const TerminalTool = Tool.define(
                 truncated: false,
                 sessionId: info.id,
               },
-              output: `Session created: ${info.id}\nShell: ${session.shell}\nWorkdir: ${cwd}`,
+              output: `Session created: ${info.id}\nShell: ${session.shell}${container ? ` (docker exec: ${container})` : ""}\nAgent: ${ctx.agent}\nWorkdir: ${cwd}`,
             }
           }
 
           // --- action: "send" (write to PTY stdin) ---
           if (params.action === "send") {
-            const { sessions } = yield* InstanceState.get(sessionState)
-            const session = sessions.get(params.sessionId)
+            const machine = yield* resolveStore(ctx)
+            if (!machine) {
+              return {
+                title: params.description ?? "Send input",
+                metadata: {
+                  output: `(session ${params.sessionId} not found)`,
+                  exit: null,
+                  pty: true as const,
+                  description: params.description ?? "Send input",
+                  truncated: false,
+                },
+                output: `Error: Session ${params.sessionId} not found. Use action="create" to start a new session.`,
+              }
+            }
+            const session = machine.sessions.get(params.sessionId)
             if (!session) {
               return {
                 title: params.description ?? "Send input",
@@ -701,8 +831,22 @@ export const TerminalTool = Tool.define(
 
           // --- action: "read" (cursor-based incremental output) ---
           if (params.action === "read") {
-            const { sessions, schedule } = yield* InstanceState.get(sessionState)
-            const session = sessions.get(params.sessionId)
+            const machine = yield* resolveStore(ctx)
+            if (!machine) {
+              return {
+                title: params.description ?? "Read output",
+                metadata: {
+                  output: `(session ${params.sessionId} not found)`,
+                  exit: null,
+                  pty: true as const,
+                  description: params.description ?? "Read output",
+                  truncated: false,
+                  sessionId: params.sessionId,
+                },
+                output: `Error: Session ${params.sessionId} not found. Use action="create" to start a new session.`,
+              }
+            }
+            const session = machine.sessions.get(params.sessionId)
             if (!session) {
               return {
                 title: params.description ?? "Read output",
@@ -717,9 +861,8 @@ export const TerminalTool = Tool.define(
                 output: `Error: Session ${params.sessionId} not found. Use action="create" to start a new session.`,
               }
             }
-
             const newOutput = takeBuffer(session)
-            schedule()
+            machine.schedule()
 
             const cleaned = stripAnsi(newOutput).trim()
 
@@ -754,8 +897,21 @@ export const TerminalTool = Tool.define(
 
           // --- action: "close" (terminate session + cleanup) ---
           if (params.action === "close") {
-            const { sessions, schedule } = yield* InstanceState.get(sessionState)
-            const session = sessions.get(params.sessionId)
+            const machine = yield* resolveStore(ctx)
+            if (!machine) {
+              return {
+                title: "Close session",
+                metadata: {
+                  output: `(session ${params.sessionId} not found)`,
+                  exit: null,
+                  pty: true as const,
+                  description: "Close session",
+                  truncated: false,
+                },
+                output: `Error: Session ${params.sessionId} not found.`,
+              }
+            }
+            const session = machine.sessions.get(params.sessionId)
             if (!session) {
               return {
                 title: "Close session",
@@ -774,8 +930,9 @@ export const TerminalTool = Tool.define(
               session.detach()
               yield* pty(Pty.Service.use((s) => s.remove(session.ptyId))).pipe(Effect.catch(() => Effect.void))
             }
-            sessions.delete(params.sessionId)
-            schedule()
+            machine.sessions.delete(params.sessionId)
+            machine.schedule()
+            dropSubagentStore(ctx.sessionID)
 
             return {
               title: "Close session",

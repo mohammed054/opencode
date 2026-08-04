@@ -1,5 +1,4 @@
-import { InstanceState } from "@/effect/instance-state"
-import { getTerminalSessions } from "@/tool/terminal-sessions"
+import { findTerminalSessions, listTerminalSessions } from "@/tool/terminal-sessions"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
@@ -10,14 +9,15 @@ export const terminalSessionsHandlers = HttpApiBuilder.group(InstanceHttpApi, "t
       .handle(
         "list",
         Effect.fn("TerminalSessionsHttpApi.list")(function* () {
-          const store = getTerminalSessions((yield* InstanceState.context).directory)
-          return store ? store.snapshot() : []
+          return listTerminalSessions()
+            .flatMap((store) => store.snapshot())
+            .toSorted((a, b) => a.createdAt - b.createdAt)
         }),
       )
       .handle(
         "close",
         Effect.fn("TerminalSessionsHttpApi.close")(function* (ctx: { params: { sessionID: string } }) {
-          const store = getTerminalSessions((yield* InstanceState.context).directory)
+          const store = findTerminalSessions(ctx.params.sessionID)
           return store ? yield* store.close(ctx.params.sessionID) : false
         }),
       )
@@ -27,7 +27,7 @@ export const terminalSessionsHandlers = HttpApiBuilder.group(InstanceHttpApi, "t
           params: { sessionID: string }
           payload: { input: string }
         }) {
-          const store = getTerminalSessions((yield* InstanceState.context).directory)
+          const store = findTerminalSessions(ctx.params.sessionID)
           return store ? yield* store.send(ctx.params.sessionID, ctx.payload.input) : false
         }),
       )
