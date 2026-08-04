@@ -73,6 +73,10 @@ function normalize(value: unknown, options: { stripNull?: boolean } = {}): unkno
       const { anyOf: _, ...rest } = schema
       return normalize({ ...withoutNull[0], ...rest })
     }
+
+    if (schema.type === undefined && withoutNull.every(isObjectSchema)) {
+      return normalize({ type: "object", ...schema })
+    }
   }
 
   if (Array.isArray(schema.allOf) && schema.allOf.every(isRecord) && canFlattenAllOf(schema.allOf, schema)) {
@@ -97,6 +101,10 @@ function isJsonSchema(value: unknown): value is JSONSchema7 {
 
 function isNonFiniteNumber(value: unknown) {
   return value === "NaN" || value === "Infinity" || value === "-Infinity"
+}
+
+function isObjectSchema(value: unknown): value is JsonObject {
+  return isRecord(value) && value.type === "object"
 }
 
 function isEmptyStructUnion(items: unknown[]) {
