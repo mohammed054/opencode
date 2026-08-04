@@ -53,6 +53,7 @@ import { DialogConsoleOrg } from "./component/dialog-console-org"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
+import { TerminalSessions } from "./routes/terminal-sessions"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -101,6 +102,7 @@ const appGlobalBindingCommands = [
   "session.quick_switch.7",
   "session.quick_switch.8",
   "session.quick_switch.9",
+  "terminal.monitor",
 ] as const
 
 const appBindingCommands = [
@@ -472,6 +474,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
     if (route.data.type === "plugin") {
       renderer.setTerminalTitle(`OC | ${route.data.id}`)
+      return
+    }
+
+    if (route.data.type === "terminalSessions") {
+      renderer.setTerminalTitle("OC | Terminal Sessions")
     }
   })
 
@@ -589,6 +596,16 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           route.navigate({
             type: "home",
           })
+          dialog.clear()
+        },
+      },
+      {
+        name: "terminal.monitor",
+        title: "Terminal session monitor",
+        category: "Terminal",
+        slashName: "terminal",
+        run: () => {
+          route.navigate({ type: "terminalSessions" })
           dialog.clear()
         },
       },
@@ -1117,6 +1134,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
               <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
                 {(_) => <Session />}
               </Show>
+            </Match>
+            <Match when={route.data.type === "terminalSessions"}>
+              <TerminalSessions />
             </Match>
           </Switch>
           {plugin()}

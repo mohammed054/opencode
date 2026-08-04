@@ -12,6 +12,11 @@ import { Global } from "@opencode-ai/core/global"
 import { Hash } from "@opencode-ai/core/util/hash"
 import * as Truncate from "./truncate"
 import { InstanceState } from "@/effect/instance-state"
+import {
+  registerTerminalSessions,
+  unregisterTerminalSessions,
+  type TerminalSessionsStore,
+} from "./terminal-sessions"
 import { Effect, Deferred, Schema } from "effect"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 
@@ -29,6 +34,9 @@ const MAX_METADATA_LENGTH = 30_000
 // they survive process restarts.
 const PERSIST_VERSION = 1
 const PERSIST_DIR = path.join(Global.Path.data, "terminal-sessions")
+
+// Transcript tail included in monitor snapshots.
+const SNAPSHOT_BUFFER_LIMIT = 60_000
 
 /**
  * Windows console (conpty/PSReadLine) requires CR to submit a line; bare LF
@@ -230,6 +238,11 @@ export const TerminalTool = Tool.define(
         let dirty = false
         let saveTimer: ReturnType<typeof setTimeout> | undefined
 
+        const listeners = new Set<() => void>()
+        const emit = () => {
+          for (const listener of listeners) listener()
+        }
+
         const flush = Effect.fn("TerminalTool.persist")(function* () {
           if (!dirty) return
           dirty = false
@@ -259,6 +272,7 @@ export const TerminalTool = Tool.define(
         })
 
         const schedule = () => {
+          emit()
           if (saveTimer) return
           dirty = true
           saveTimer = setTimeout(() => {
@@ -296,6 +310,47 @@ export const TerminalTool = Tool.define(
           }
         }
 
+        const store: TerminalSessionsStore = {
+          snapshot: () =>
+            [...sessions.entries()].map(([id, s]) => ({
+              id,
+              live: s.live,
+              buffer: s.buffer.slice(-SNAPSHOT_BUFFER_LIMIT),
+              trimmed: s.trimmed,
+              reported: s.reported,
+              exitCode: s.exitCode,
+              description: s.description,
+              shell: s.shell,
+              cwd: s.cwd,
+              createdAt: s.createdAt,
+            })),
+          subscribe: (listener) => {
+            listeners.add(listener)
+            return () => listeners.delete(listener)
+          },
+          close: (id) =>
+            Effect.gen(function* () {
+              const session = sessions.get(id)
+              if (!session) return false
+              if (session.live) {
+                session.detach()
+                yield* pty(Pty.Service.use((s) => s.remove(session.ptyId))).pipe(Effect.catch(() => Effect.void))
+              }
+              sessions.delete(id)
+              schedule()
+              return true
+            }),
+          send: (id, input) =>
+            Effect.gen(function* () {
+              const session = sessions.get(id)
+              if (!session || !session.live) return false
+              const data = /^\x03|\x04|\x1a|\x1c$/.test(input) ? input : input + LINE_END
+              yield* pty(Pty.Service.use((s) => s.write(session.ptyId, data))).pipe(Effect.catch(() => Effect.void))
+              return true
+            }),
+        }
+        registerTerminalSessions(ctx.directory, store)
+
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             // Stop new saves, then tear down live PTYs (their onEnd no longer
@@ -310,6 +365,8 @@ export const TerminalTool = Tool.define(
             }
             yield* flush()
             sessions.clear()
+            listeners.clear()
+            unregisterTerminalSessions(ctx.directory)
           }),
         )
 

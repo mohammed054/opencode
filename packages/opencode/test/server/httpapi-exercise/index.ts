@@ -480,6 +480,24 @@ const scenarios: Scenario[] = [
     .get("/pty/{ptyID}/connect", "pty.connect")
     .at((ctx) => ({ path: route("/pty/{ptyID}/connect", { ptyID: "pty_httpapi_missing" }), headers: ctx.headers() }))
     .status(404, undefined, "none"),
+  http.protected.get("/terminal-sessions", "terminal-sessions.list").json(200, array),
+  http.protected
+    .post("/terminal-sessions/{sessionID}/close", "terminal-sessions.close")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/terminal-sessions/{sessionID}/close", { sessionID: "ts_httpapi_missing" }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => check(body === false, "close with no registered store should return false")),
+  http.protected
+    .post("/terminal-sessions/{sessionID}/send", "terminal-sessions.send")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/terminal-sessions/{sessionID}/send", { sessionID: "ts_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: { input: "echo hello" },
+    }))
+    .json(200, (body) => check(body === false, "send with no registered store should return false")),
   http.protected.get("/experimental/console", "experimental.console.get").json(),
   http.protected.get("/experimental/console/orgs", "experimental.console.listOrgs").json(),
   http.protected
