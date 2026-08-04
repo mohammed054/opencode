@@ -232,6 +232,13 @@ import type {
   SyncStartResponses,
   SyncStealErrors,
   SyncStealResponses,
+  TerminalSessionsCloseErrors,
+  TerminalSessionsCloseResponses,
+  TerminalSessionSendInput,
+  TerminalSessionsListErrors,
+  TerminalSessionsListResponses,
+  TerminalSessionsSendErrors,
+  TerminalSessionsSendResponses,
   TextPartInput,
   ToolIdsErrors,
   ToolIdsResponses,
@@ -4574,6 +4581,121 @@ export class Sync extends HeyApiClient {
   }
 }
 
+export class TerminalSessions extends HeyApiClient {
+  /**
+   * List terminal sessions
+   *
+   * List the agent's terminal sessions for the instance, including ended ones.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      TerminalSessionsListResponses,
+      TerminalSessionsListErrors,
+      ThrowOnError
+    >({
+      url: "/terminal-sessions",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Close terminal session
+   *
+   * Terminate a terminal session and free its resources.
+   */
+  public close<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      TerminalSessionsCloseResponses,
+      TerminalSessionsCloseErrors,
+      ThrowOnError
+    >({
+      url: "/terminal-sessions/{sessionID}/close",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Send input to terminal session
+   *
+   * Write input to a running terminal session (commands are submitted with Enter).
+   */
+  public send<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      terminalSessionSendInput?: TerminalSessionSendInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "terminalSessionSendInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      TerminalSessionsSendResponses,
+      TerminalSessionsSendErrors,
+      ThrowOnError
+    >({
+      url: "/terminal-sessions/{sessionID}/send",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Control extends HeyApiClient {
   /**
    * Get next TUI request
@@ -7205,6 +7327,11 @@ export class OpencodeClient extends HeyApiClient {
   private _sync?: Sync
   get sync(): Sync {
     return (this._sync ??= new Sync({ client: this.client }))
+  }
+
+  private _terminalSessions?: TerminalSessions
+  get terminalSessions(): TerminalSessions {
+    return (this._terminalSessions ??= new TerminalSessions({ client: this.client }))
   }
 
   private _tui?: Tui

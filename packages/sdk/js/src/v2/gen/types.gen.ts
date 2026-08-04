@@ -1671,6 +1671,7 @@ export type PermissionConfig =
       grep?: PermissionRuleConfig
       list?: PermissionRuleConfig
       bash?: PermissionRuleConfig
+      terminal?: PermissionRuleConfig
       task?: PermissionRuleConfig
       external_directory?: PermissionRuleConfig
       todowrite?: PermissionActionConfig
@@ -2595,6 +2596,26 @@ export type SessionBusyError = {
   _tag: "SessionBusyError"
   sessionID: string
   message: string
+}
+
+export type TerminalSessionSnapshot = {
+  id: string
+  live: boolean
+  buffer: string
+  trimmed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  reported: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  description: string
+  shell: string
+  cwd: string
+  createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type TerminalSessionSendInput = {
+  /**
+   * Text to write to the session's terminal
+   */
+  input: string
 }
 
 export type EventTuiPromptAppend = {
@@ -10610,6 +10631,94 @@ export type SyncHistoryListResponses = {
 }
 
 export type SyncHistoryListResponse = SyncHistoryListResponses[keyof SyncHistoryListResponses]
+
+export type TerminalSessionsListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/terminal-sessions"
+}
+
+export type TerminalSessionsListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type TerminalSessionsListError = TerminalSessionsListErrors[keyof TerminalSessionsListErrors]
+
+export type TerminalSessionsListResponses = {
+  /**
+   * List of terminal sessions
+   */
+  200: Array<TerminalSessionSnapshot>
+}
+
+export type TerminalSessionsListResponse = TerminalSessionsListResponses[keyof TerminalSessionsListResponses]
+
+export type TerminalSessionsCloseData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/terminal-sessions/{sessionID}/close"
+}
+
+export type TerminalSessionsCloseErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type TerminalSessionsCloseError = TerminalSessionsCloseErrors[keyof TerminalSessionsCloseErrors]
+
+export type TerminalSessionsCloseResponses = {
+  /**
+   * Session closed
+   */
+  200: boolean
+}
+
+export type TerminalSessionsCloseResponse = TerminalSessionsCloseResponses[keyof TerminalSessionsCloseResponses]
+
+export type TerminalSessionsSendData = {
+  body?: TerminalSessionSendInput
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/terminal-sessions/{sessionID}/send"
+}
+
+export type TerminalSessionsSendErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type TerminalSessionsSendError = TerminalSessionsSendErrors[keyof TerminalSessionsSendErrors]
+
+export type TerminalSessionsSendResponses = {
+  /**
+   * Input sent
+   */
+  200: boolean
+}
+
+export type TerminalSessionsSendResponse = TerminalSessionsSendResponses[keyof TerminalSessionsSendResponses]
 
 export type TuiAppendPromptData = {
   body?: {
